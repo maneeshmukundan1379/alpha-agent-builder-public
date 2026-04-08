@@ -139,18 +139,65 @@ def _raise_clear_llm_error(exc: Exception, *, provider_label: str) -> None:
 
 
 def _parse_model_json(raw: str) -> dict[str, Any]:
+    """Parse edit-agent JSON; tolerate markdown fences, BOM, and leading/trailing prose."""
     raw = raw.strip()
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        pass
-    m = re.search(r"\{[\s\S]*\}\s*$", raw)
-    if m:
+    if not raw:
+        raise ValueError("Model did not return valid JSON.")
+
+    if raw.startswith("\ufeff"):
+        raw = raw[1:].strip()
+
+    candidates: list[str] = [raw]
+    fence = re.match(r"^```(?:json)?\s*\n?([\s\S]*?)\n?```\s*$", raw, re.IGNORECASE)
+    if fence:
+        inner = fence.group(1).strip()
+        if inner:
+            candidates.append(inner)
+    if raw.startswith("```"):
+        stripped = re.sub(r"^```(?:json)?\s*", "", raw, count=1, flags=re.IGNORECASE)
+        stripped = re.sub(r"\s*```\s*$", "", stripped, count=1).strip()
+        if stripped and stripped not in candidates:
+            candidates.append(stripped)
+
+    decoder = json.JSONDecoder()
+
+    def _looks_like_edit_payload(d: dict[str, Any]) -> bool:
+        return "assistant_message" in d or "files" in d
+
+    def _try_one(s: str) -> dict[str, Any] | None:
+        s = s.strip()
+        if not s:
+            return None
         try:
-            return json.loads(m.group(0))
+            data = json.loads(s)
+            if isinstance(data, dict):
+                return data
+            return None
         except json.JSONDecodeError:
             pass
-    raise ValueError("Model did not return valid JSON.")
+        for i, ch in enumerate(s):
+            if ch != "{":
+                continue
+            try:
+                data, _end = decoder.raw_decode(s[i:])
+                if isinstance(data, dict) and _looks_like_edit_payload(data):
+                    return data
+            except json.JSONDecodeError:
+                continue
+        return None
+
+    seen: set[str] = set()
+    for cand in candidates:
+        if cand in seen:
+            continue
+        seen.add(cand)
+        parsed = _try_one(cand)
+        if parsed is not None:
+            return parsed
+
+    raise ValueError(
+        "Model did not return valid JSON. Try a shorter instruction, or split UI changes into smaller steps."
+    )
 
 
 def _log_ts() -> str:
