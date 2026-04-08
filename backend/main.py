@@ -198,8 +198,9 @@ async def proxy_generated_agent_vite(agent_id: str, full_path: str, request: Req
     if not ports:
         raise HTTPException(status_code=404, detail="This agent UI is not running. Click Run again.")
     _, vite_p = ports
-    path = f"/{full_path}" if full_path else "/"
-    url = f"http://127.0.0.1:{vite_p}{path}"
+    # Must preserve /_agent_vite/{id}/... so Vite (configured with matching --base) does not 302 from "/".
+    upstream_path = request.url.path
+    url = f"http://127.0.0.1:{vite_p}{upstream_path}"
     if request.url.query:
         url = f"{url}?{request.url.query}"
     return await _forward_to_agent_upstream(request.method, url, request)
@@ -215,7 +216,8 @@ async def proxy_generated_agent_vite_root(agent_id: str, request: Request) -> Re
     if not ports:
         raise HTTPException(status_code=404, detail="This agent UI is not running. Click Run again.")
     _, vite_p = ports
-    url = f"http://127.0.0.1:{vite_p}/"
+    upstream_path = request.url.path
+    url = f"http://127.0.0.1:{vite_p}{upstream_path}"
     if request.url.query:
         url = f"{url}?{request.url.query}"
     return await _forward_to_agent_upstream(request.method, url, request)
