@@ -1,0 +1,31 @@
+# Run the full app on any server — no tunnel from your laptop required.
+#
+#   docker compose up --build -d
+#   open http://localhost:8080
+#
+# Data survives in the `builder-data` volume (SQLite, generated agents, git cache).
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment:
+      ALPHA_APP_DATA_DIR: /data
+      # Optional: comma-separated origins if you expose the API directly (not needed for this compose).
+      # CORS_ORIGINS: https://app.example.com
+    volumes:
+      - builder-data:/data
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  builder-data:
