@@ -7,10 +7,12 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
+import httpx
+from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.responses import Response
 
 from .auth_store import (
     change_user_password,
@@ -39,7 +41,7 @@ from .generator import (
 )
 from .providers import list_providers
 from .requirements_builder import build_requirements, preview_generated_files
-from .runner import get_agent_logs, is_agent_running, run_agent, stop_local_ui_server
+from .runner import get_agent_logs, get_react_proxy_ports, is_agent_running, run_agent, stop_local_ui_server
 from .schemas import (
     AgentDetailResponse,
     AgentEditChatRequest,
@@ -134,6 +136,89 @@ def _require_user_env(user: dict) -> None:
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+_HOP_BY_HOP = frozenset(
+    {
+        "connection",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailers",
+        "transfer-encoding",
+        "upgrade",
+        "host",
+    },
+)
+
+
+async def _forward_to_agent_upstream(method: str, url: str, request: Request) -> Response:
+    headers = {k: v for k, v in request.headers.items() if k.lower() not in _HOP_BY_HOP}
+    body = await request.body()
+    async with httpx.AsyncClient(timeout=120.0, follow_redirects=False) as client:
+        try:
+            upstream = await client.request(method, url, content=body or None, headers=headers)
+        except httpx.RequestError as exc:
+            raise HTTPException(status_code=502, detail=f"Agent UI upstream error: {exc}") from exc
+    out_headers = {k: v for k, v in upstream.headers.items() if k.lower() not in _HOP_BY_HOP}
+    return Response(
+        content=upstream.content,
+        status_code=upstream.status_code,
+        headers=out_headers,
+    )
+
+
+@app.api_route(
+    "/_agent_api/{agent_id}/{full_path:path}",
+    methods=["GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    include_in_schema=False,
+)
+async def proxy_generated_agent_api(agent_id: str, full_path: str, request: Request) -> Response:
+    """Proxy to the generated agent FastAPI (React) when PUBLIC_BASE_URL is set (Railway)."""
+    ports = get_react_proxy_ports(agent_id)
+    if not ports:
+        raise HTTPException(status_code=404, detail="This agent UI is not running. Click Run again.")
+    api_p, _ = ports
+    path = f"/{full_path}" if full_path else "/"
+    url = f"http://127.0.0.1:{api_p}{path}"
+    if request.url.query:
+        url = f"{url}?{request.url.query}"
+    return await _forward_to_agent_upstream(request.method, url, request)
+
+
+@app.api_route(
+    "/_agent_vite/{agent_id}/{full_path:path}",
+    methods=["GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    include_in_schema=False,
+)
+async def proxy_generated_agent_vite(agent_id: str, full_path: str, request: Request) -> Response:
+    """Proxy to Vite dev server for generated React agents."""
+    ports = get_react_proxy_ports(agent_id)
+    if not ports:
+        raise HTTPException(status_code=404, detail="This agent UI is not running. Click Run again.")
+    _, vite_p = ports
+    path = f"/{full_path}" if full_path else "/"
+    url = f"http://127.0.0.1:{vite_p}{path}"
+    if request.url.query:
+        url = f"{url}?{request.url.query}"
+    return await _forward_to_agent_upstream(request.method, url, request)
+
+
+@app.api_route(
+    "/_agent_vite/{agent_id}",
+    methods=["GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    include_in_schema=False,
+)
+async def proxy_generated_agent_vite_root(agent_id: str, request: Request) -> Response:
+    ports = get_react_proxy_ports(agent_id)
+    if not ports:
+        raise HTTPException(status_code=404, detail="This agent UI is not running. Click Run again.")
+    _, vite_p = ports
+    url = f"http://127.0.0.1:{vite_p}/"
+    if request.url.query:
+        url = f"{url}?{request.url.query}"
+    return await _forward_to_agent_upstream(request.method, url, request)
 
 
 # Create a new user account and return an authenticated session.
@@ -459,6 +544,7 @@ def _mount_production_spa(application: FastAPI) -> None:
         if (
             full_path.startswith("api/")
             or full_path == "api"
+            or full_path.startswith("_agent_")
             or full_path.startswith("docs")
             or full_path.startswith("redoc")
             or full_path in ("openapi.json", "favicon.ico")

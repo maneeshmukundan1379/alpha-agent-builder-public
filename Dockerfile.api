@@ -8,8 +8,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     ALPHA_APP_DATA_DIR=/data
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get install -y --no-install-recommends git ca-certificates curl xz-utils \
+    && case $(dpkg --print-architecture) in amd64) NODE_ARCH=x64 ;; arm64) NODE_ARCH=arm64 ;; *) echo "unsupported arch"; exit 1 ;; esac \
+    && NODE_VERSION=20.19.0 \
+    && curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz" \
+    | tar -xJ --strip-components=1 -C /usr/local \
+    && rm -rf /var/lib/apt/lists/* \
+    && node --version \
+    && npm --version
 
 COPY backend/requirements.txt /app/backend/requirements.txt
 RUN pip install --no-cache-dir -r /app/backend/requirements.txt

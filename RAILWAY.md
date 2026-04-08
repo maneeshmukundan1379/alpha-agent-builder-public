@@ -35,10 +35,11 @@ SQLite and generated agents live under **`ALPHA_APP_DATA_DIR`** (default **`/dat
 
 Without a volume, **users and agents are lost** on every deploy.
 
-## 4. Environment variables (optional)
+## 4. Environment variables
 
 | Variable | When to set |
 |----------|-------------|
+| **`PUBLIC_BASE_URL`** | **Required on Railway** if you use **React** agents and click **Run**. Set to your public app URL with **no trailing slash**, e.g. `https://alpha-agent-builder-public-production.up.railway.app`. The app proxies generated Vite + agent API traffic through this host. |
 | `ALPHA_APP_DATA_DIR` | Only if you change the volume mount path from `/data`. |
 | `CORS_ORIGINS` | Only if you split frontend and API onto different public URLs. |
 | `CORS_ORIGIN_REGEX` | Override default tunnel regex; set empty to disable regex matching. |

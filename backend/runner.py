@@ -29,10 +29,18 @@ _run_records: dict[str, RunRecord] = {}
 _prepared_agents: dict[str, str] = {}
 _ui_servers: dict[str, subprocess.Popen] = {}
 _ui_server_lock = threading.Lock()
+# agent_id -> (fastapi_port, vite_port) for PUBLIC_BASE_URL reverse proxy (Railway, etc.)
+_react_proxy_ports: dict[str, tuple[int, int]] = {}
+
+
+def get_react_proxy_ports(agent_id: str) -> tuple[int, int] | None:
+    """Return (api_port, vite_port) if a React agent UI is running, for HTTP proxying."""
+    return _react_proxy_ports.get(agent_id)
 
 
 # Stop a background Gradio, API, or API+Vite server for one agent, if any.
 def stop_local_ui_server(agent_id: str) -> None:
+    _react_proxy_ports.pop(agent_id, None)
     with _ui_server_lock:
         raw = _ui_servers.pop(agent_id, None)
     procs: list[subprocess.Popen] = raw if isinstance(raw, list) else ([raw] if raw is not None else [])
@@ -75,6 +83,7 @@ def _start_local_ui_server(
         "ALPHA_AGENT_MODEL": metadata.model,
         "ALPHA_AGENT_PORT": str(port),
     }
+    react_ports: tuple[int, int] | None = None
 
     if metadata.frontend_type == "gradio":
         command = [sys.executable, "app.py"]
@@ -89,8 +98,15 @@ def _start_local_ui_server(
             raise RuntimeError(
                 "Node.js/npm is required to run React agents. Install from https://nodejs.org/ and retry."
             )
+        public_base = (os.environ.get("PUBLIC_BASE_URL") or "").strip().rstrip("/")
+        if (os.environ.get("RAILWAY_ENVIRONMENT") or "").strip() and not public_base:
+            raise RuntimeError(
+                "On Railway, set environment variable PUBLIC_BASE_URL to your app URL "
+                "(e.g. https://your-service.up.railway.app) so React agent UIs are reachable."
+            )
+        vite_api_url = f"{public_base}/_agent_api/{agent_id}" if public_base else f"http://127.0.0.1:{port}"
         (react_dir / ".env.development.local").write_text(
-            f"VITE_API_URL=http://127.0.0.1:{port}\n",
+            f"VITE_API_URL={vite_api_url}\n",
             encoding="utf-8",
         )
         npm_install = subprocess.run(
@@ -107,6 +123,7 @@ def _start_local_ui_server(
 
         api_port = port
         vite_port = _find_free_port()
+        react_ports = (api_port, vite_port)
         command = [
             sys.executable,
             "-m",
@@ -117,7 +134,11 @@ def _start_local_ui_server(
             "--port",
             str(api_port),
         ]
-        local_url = f"http://127.0.0.1:{vite_port}/"
+        local_url = (
+            f"{public_base}/_agent_vite/{agent_id}/"
+            if public_base
+            else f"http://127.0.0.1:{vite_port}/"
+        )
         ready_url = f"http://127.0.0.1:{api_port}/health"
     else:
         raise ValueError("Unsupported frontend for local UI server.")
@@ -161,7 +182,18 @@ def _start_local_ui_server(
             raise RuntimeError(f"Timed out waiting for server at {ready_url}")
 
         if metadata.frontend_type == "react":
-            vite_cmd = [npm, "run", "dev", "--", "--host", "127.0.0.1", "--port", str(vite_port)]
+            vite_cmd = [
+                npm,
+                "run",
+                "dev",
+                "--",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(vite_port),
+            ]
+            if public_base:
+                vite_cmd.extend(["--base", f"/_agent_vite/{agent_id}/"])
             log_handle.write(f"\nStarting Vite: {' '.join(vite_cmd)}\nVite port: {vite_port}\n\n")
             log_handle.flush()
             vite_proc = subprocess.Popen(
@@ -205,6 +237,8 @@ def _start_local_ui_server(
 
     with _ui_server_lock:
         _ui_servers[agent_id] = procs
+        if react_ports is not None:
+            _react_proxy_ports[agent_id] = react_ports
 
     log_handle.write(f"\n--- Local UI ready ---\nOpen in browser: {local_url}\n")
     log_handle.flush()
