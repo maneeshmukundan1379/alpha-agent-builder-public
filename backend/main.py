@@ -19,9 +19,10 @@ from .auth_store import (
     create_user,
     delete_session,
     get_user_by_session,
-    get_user_env_file_text,
+    get_user_env_editor_content,
     get_user_secret_values,
     get_user_settings,
+    get_user_env_variables,
     init_db,
     login_user,
     save_user_env_file,
@@ -297,12 +298,13 @@ def settings(user: dict = Depends(require_user)) -> SettingsResponse:
     return SettingsResponse(settings=_settings_payload(get_user_settings(int(user["id"]))))
 
 
-# Return the current user global `.env` body (same keys used for every agent).
+# Return a masked editor view of the current user global env config.
 @app.get("/api/user-env", response_model=UserEnvResponse)
 def read_user_env(user: dict = Depends(require_user)) -> UserEnvResponse:
     uid = int(user["id"])
     return UserEnvResponse(
-        content=get_user_env_file_text(uid),
+        content=get_user_env_editor_content(uid),
+        variables=get_user_env_variables(uid),
         user_env_saved=user_env_configured(uid),
     )
 
@@ -313,7 +315,8 @@ def write_user_env(request: UserEnvUpdateRequest, user: dict = Depends(require_u
     uid = int(user["id"])
     save_user_env_file(uid, request.content)
     return UserEnvResponse(
-        content=get_user_env_file_text(uid),
+        content=get_user_env_editor_content(uid),
+        variables=get_user_env_variables(uid),
         user_env_saved=True,
     )
 
@@ -347,7 +350,12 @@ def generate_agent(
         agent = generate_agent_project(
             request.config,
             user=user,
-            settings=get_user_secret_values(int(user["id"])),
+            settings=get_user_secret_values(
+                int(user["id"]),
+                include_openai=request.config.provider_id == "openai",
+                include_gemini=request.config.provider_id == "gemini",
+                include_github=False,
+            ),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -386,7 +394,12 @@ def checkin_agent(
 ) -> CheckInAgentResponse:
     _require_user_env(user)
     try:
-        token = get_user_secret_values(int(user["id"]))["github_token"].strip()
+        token = get_user_secret_values(
+            int(user["id"]),
+            include_openai=False,
+            include_gemini=False,
+            include_github=True,
+        )["github_token"].strip()
         if not token:
             raise HTTPException(
                 status_code=400,
@@ -428,11 +441,17 @@ def agent_edit_chat(
 ) -> AgentEditChatResponse:
     _require_user_env(user)
     try:
+        metadata = get_generated_agent(int(user["id"]), agent_id)
         assistant_message, updated_files, activity_log = apply_agent_edits(
             int(user["id"]),
             agent_id,
             [message.model_dump() for message in request.messages],
-            settings=get_user_secret_values(int(user["id"])),
+            settings=get_user_secret_values(
+                int(user["id"]),
+                include_openai=metadata.provider_id == "openai",
+                include_gemini=metadata.provider_id == "gemini",
+                include_github=False,
+            ),
             include_static_diagnostics=request.include_static_diagnostics,
             runtime_error=request.runtime_error or "",
         )

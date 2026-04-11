@@ -31,6 +31,7 @@ import type {
   ProviderInfo,
   RequirementsPreviewResponse,
   SettingsPayload,
+  UserEnvVariableStatus,
   UserProfile,
 } from "./types";
 
@@ -128,6 +129,7 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [userEnvOpen, setUserEnvOpen] = useState(false);
   const [userEnvInitialContent, setUserEnvInitialContent] = useState("");
+  const [userEnvVariables, setUserEnvVariables] = useState<UserEnvVariableStatus[]>([]);
   /** Bumps when a new authenticated session loads so controlled inputs remount (avoids stray browser autofill). */
   const [builderEpoch, setBuilderEpoch] = useState(0);
 
@@ -135,6 +137,7 @@ function App() {
     try {
       const env = await fetchUserEnv();
       setUserEnvInitialContent(env.content);
+      setUserEnvVariables(env.variables);
       setUserEnvOpen(true);
       setBanner(null);
     } catch (error) {
@@ -148,11 +151,12 @@ function App() {
   const handleSaveUserEnv = async (content: string) => {
     const saved = await saveUserEnv(content);
     setUserEnvInitialContent(saved.content);
+    setUserEnvVariables(saved.variables);
     const me = await fetchMe();
     setSettings(me.settings);
     setBanner({
       kind: "success",
-      text: "Environment file saved. Reopen Create/Edit Environment file anytime to confirm your keys and GITHUB_TOKEN.",
+      text: "Environment settings saved. Reopen Create/Edit Environment file anytime to confirm which variables are configured.",
     });
   };
 
@@ -444,6 +448,7 @@ function App() {
           />
           <UserEnvModal
             initialContent={userEnvInitialContent}
+            variables={userEnvVariables}
             isFirstSetup={!settings?.user_env_saved}
             onClose={() => setUserEnvOpen(false)}
             onSave={handleSaveUserEnv}

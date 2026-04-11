@@ -266,8 +266,14 @@ class CheckInAgentRequest(BaseModel):
         return value.strip()
 
 
+class UserEnvVariableStatus(BaseModel):
+    key: str
+    masked_value: str
+
+
 class UserEnvResponse(BaseModel):
     content: str
+    variables: list[UserEnvVariableStatus] = Field(default_factory=list)
     user_env_saved: bool
 
 

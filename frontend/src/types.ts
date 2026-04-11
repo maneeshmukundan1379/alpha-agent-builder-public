@@ -131,8 +131,14 @@ export interface SettingsPayload {
   user_env_saved: boolean;
 }
 
+export interface UserEnvVariableStatus {
+  key: string;
+  masked_value: string;
+}
+
 export interface UserEnvResponse {
   content: string;
+  variables: UserEnvVariableStatus[];
   user_env_saved: boolean;
 }
 

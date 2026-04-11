@@ -953,7 +953,7 @@ def _render_agent_config(
         "supported_upload_types": config.supported_upload_types,
         "requirements": requirements,
         "secret_names": secret_names,
-        "include_user_env_file": True,
+        "runtime_env_injected": True,
         "extra_secret_key_names": [],
         "declared_env_var_names": sorted(declared),
     }

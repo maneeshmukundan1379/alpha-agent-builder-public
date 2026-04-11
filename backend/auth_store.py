@@ -123,6 +123,45 @@ def _hash_password(password: str) -> str:
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 
+_FIRST_TIME_USER_ENV_TEMPLATE = """# One line per variable (UPPER_SNAKE_CASE).
+# Saved values stay on the server and are never shown in the browser again after save.
+
+OPENAI_API_KEY=
+
+GEMINI_API_KEY=
+
+GOOGLE_API_KEY=
+
+GITHUB_TOKEN=
+"""
+
+_PATCH_USER_ENV_TEMPLATE = """# Add only the keys you want to add or replace.
+# Omitted keys stay unchanged on the server.
+# To clear a saved key, set it to an empty value, for example:
+# OPENAI_API_KEY=
+#
+# Example updates:
+# OPENAI_API_KEY=your_new_key
+# GITHUB_TOKEN=your_new_token
+"""
+
+
+def _serialize_env_text(values: dict[str, str]) -> str:
+    if not values:
+        return ""
+    lines = [f'{key}="{_escape_env_value(val)}"' for key, val in sorted(values.items())]
+    return "\n".join(lines) + "\n"
+
+
+def _mask_env_value(value: str) -> str:
+    clean = (value or "").strip()
+    if not clean:
+        return "(empty)"
+    if len(clean) <= 4:
+        return "*" * len(clean)
+    return f"{'*' * min(8, len(clean) - 4)}{clean[-4:]}"
+
+
 # Normalize username or email identifiers for lookups.
 def _normalize_identifier(identifier: str) -> str:
     return (identifier or "").strip().lower()
@@ -315,9 +354,39 @@ def get_user_env_file_text(user_id: int) -> str:
     return str(row["user_env_text"] or "")
 
 
+def get_user_env_variables(user_id: int) -> list[dict[str, str]]:
+    parsed = parse_dotenv_content(get_user_env_file_text(user_id))
+    return [
+        {
+            "key": key,
+            "masked_value": _mask_env_value(value),
+        }
+        for key, value in sorted(parsed.items())
+    ]
+
+
+def get_user_env_editor_content(user_id: int) -> str:
+    variables = get_user_env_variables(user_id)
+    if not variables and not user_env_configured(user_id):
+        return _FIRST_TIME_USER_ENV_TEMPLATE
+    if not variables:
+        return _PATCH_USER_ENV_TEMPLATE
+    lines = [_PATCH_USER_ENV_TEMPLATE.rstrip(), "", "# Currently saved on the server (masked):"]
+    lines.extend(f"# {item['key']}={item['masked_value']}" for item in variables)
+    return "\n".join(lines).rstrip() + "\n"
+
+
 # Persist the user's global `.env` text. Marks setup complete so builder and runs proceed.
 def save_user_env_file(user_id: int, content: str) -> None:
     _ensure_settings_row(user_id)
+    current = parse_dotenv_content(get_user_env_file_text(user_id))
+    updates = parse_dotenv_content(content or "")
+    merged = dict(current)
+    for key, value in updates.items():
+        if value == "":
+            merged.pop(key, None)
+        else:
+            merged[key] = value
     now = datetime.now(timezone.utc).isoformat()
     with _connect_db() as conn:
         conn.execute(
@@ -326,7 +395,7 @@ def save_user_env_file(user_id: int, content: str) -> None:
             SET user_env_text = ?, user_env_saved = 1, updated_at = ?
             WHERE user_id = ?
             """,
-            (content or "", now, user_id),
+            (_serialize_env_text(merged), now, user_id),
         )
 
 
@@ -336,13 +405,19 @@ def get_user_process_env(user_id: int) -> dict[str, str]:
 
 
 # Return secret-shaped dict for codegen / GitHub (compat with former Settings keys).
-def get_user_secret_values(user_id: int) -> dict[str, str]:
+def get_user_secret_values(
+    user_id: int,
+    *,
+    include_openai: bool = True,
+    include_gemini: bool = True,
+    include_github: bool = True,
+) -> dict[str, str]:
     parsed = get_user_process_env(user_id)
     gem = (parsed.get("GEMINI_API_KEY") or parsed.get("GOOGLE_API_KEY") or "").strip()
     return {
-        "openai_api_key": (parsed.get("OPENAI_API_KEY") or "").strip(),
-        "gemini_api_key": gem,
-        "github_token": (parsed.get("GITHUB_TOKEN") or "").strip(),
+        "openai_api_key": (parsed.get("OPENAI_API_KEY") or "").strip() if include_openai else "",
+        "gemini_api_key": gem if include_gemini else "",
+        "github_token": (parsed.get("GITHUB_TOKEN") or "").strip() if include_github else "",
     }
 
 

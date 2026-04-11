@@ -108,7 +108,7 @@ def try_generate_logic_py(
         "allow_file_uploads": config.allow_file_uploads,
         "supported_upload_types": config.supported_upload_types,
         "extra_requirements_suggested_by_user": config.extra_requirements,
-        "merge_user_env_file": True,
+        "runtime_env_injected": True,
         "declared_env_var_names": _declared_env_var_names(config, user_env_var_names),
     }
 

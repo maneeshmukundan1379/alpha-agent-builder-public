@@ -17,7 +17,7 @@ from .providers import get_provider
 from .requirements_builder import build_requirements, preview_generated_files
 from .schemas import AgentConfigRequest, AgentMetadata, AgentTreeNode, UploadedFileInfo
 from .codegen import try_generate_logic_py
-from .secrets_store import has_saved_secrets, parse_dotenv_content, write_agent_environment
+from .secrets_store import parse_dotenv_content
 from .templates import render_project_files
 from .github_sync import sync_generated_project_to_github
 from .runtime_paths import app_data_dir
@@ -151,8 +151,6 @@ def generate_agent_project(
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file_path.write_text(content, encoding="utf-8")
 
-    write_agent_environment(agent_dir, user_env_text)
-
     if config.allow_file_uploads:
         uploads_dir = _uploads_dir(agent_dir)
         uploads_dir.mkdir(parents=True, exist_ok=True)
@@ -179,7 +177,7 @@ def generate_agent_project(
         github_commit_sha="",
         agent_dir=str(agent_dir),
         created_at=datetime.now(timezone.utc),
-        has_secrets=has_saved_secrets(agent_dir),
+        has_secrets=bool(user_env_keys),
         requirements=requirements,
         generated_files=generated_files,
         generation_source=generation_source,
